@@ -11,13 +11,13 @@ Cesar is your wingman for bad decisions. Put the people you shouldn't text after
 
 Like Caesar at the Colosseum. Thumbs up or thumbs down.
 
-> **This is an interactive prototype.** No texts are actually sent, the location is simulated, and your camera image never leaves your device.
+> **This is an interactive prototype.** No texts are actually sent and the location is simulated. The face scan runs entirely on your device (Google's MediaPipe), and your camera image is never uploaded or saved.
 
 ## Try the demo
 
 1. You start out **at a bar** (simulated GPS). Tap the location card to switch places.
 2. Tap **Text someone**, pick someone marked 🚫 (like *The Ex*), and write something regrettable.
-3. Pass the **face scan**. If there's no camera, a stunt double stands in.
+3. Pass the **face scan**: get your face in the oval, blink twice, turn your head, then hold perfectly still. It's real face tracking, running on your phone. No camera? A stunt double stands in.
 4. Watch the **panel** vote, or tap a thumb to vote on a judge's behalf.
 5. Check the **Shame Log** for every verdict.
 
@@ -46,9 +46,9 @@ The camera needs `localhost` or HTTPS, so serve it rather than double-clicking `
 | Feature | Prototype | Real app (later) |
 | --- | --- | --- |
 | Location | You pick from a list | GPS + venue lookup (e.g. Google Places) to spot bars and restaurants |
-| Face scan | Camera preview + scripted checks | Real liveness / identity check |
+| Face scan | Real on-device face tracking (MediaPipe): face in the oval, two real blinks, head turn, hold still. Proves a live face, not *whose* face | Identity check against the account owner's face |
 | Blocking the text | Texts are written inside Cesar | Cesar is the messaging app for No-Go contacts (iOS won't let apps intercept iMessage) |
-| Panel | Simulated judges | Judges get an SMS link and vote in the browser, no install needed |
+| Panel | Simulated judges with ~45 context-aware replies (Mom has her own lines) | Judges get an SMS link and vote in the browser, no install needed |
 | Timeout | — | No verdict in 15 minutes = the text dies |
 
 ## Project layout
@@ -62,4 +62,4 @@ assets/logo.svg the thumbs-up / thumbs-down logo
 
 ## Credits
 
-Thumb icons from [Lucide](https://lucide.dev) (ISC license).
+Icons from [Lucide](https://lucide.dev) (ISC license). Face tracking by [MediaPipe Face Landmarker](https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker) (Apache 2.0).

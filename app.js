@@ -9,6 +9,19 @@
   const LOG_LIMIT = 25;
   const CAMERA_TIMEOUT_MS = 8000;
 
+  // Face tracking: MediaPipe Face Landmarker, loaded on demand and run on-device.
+  const MEDIAPIPE_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1';
+  const FACE_MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
+  const TRACKER_TIMEOUT_MS = 20000; // give up and run the scripted check
+  const SKIP_AFTER_MS = 12000;      // offer "skip" to anyone stuck
+  const MIN_FACE_WIDTH = 0.18;      // cheek-to-cheek, as a fraction of the frame
+  const CENTER_HOLD_MS = 700;
+  const BLINK_MIN = 0.45;           // eyeBlink blendshape score that can count as closed
+  const BLINK_RISE = 0.2;           // ...and how far above this person's resting level
+  const TURN_THRESHOLD = 0.16;      // nose offset from the cheek midpoint, as a fraction of face width
+  const STILL_MS = 1500;
+  const STILL_TOLERANCE = 0.035;    // how far the nose may drift while holding still
+
   const LOCATIONS = [
     { id: 'home', name: 'Home', kind: 'Residence', icon: 'home', risky: false, blurb: 'Couch. Sweatpants. Safe.' },
     { id: 'office', name: 'The Office', kind: 'Workplace', icon: 'briefcase', risky: false, blurb: 'Stone-cold sober (allegedly).' },
@@ -17,6 +30,7 @@
     { id: 'club', name: 'Club Neon', kind: 'Nightclub', icon: 'party', risky: true, blurb: 'Your judgment checked its coat.' },
   ];
 
+  // Panel replies. {contact}, {place} and {score} are filled in per trial.
   const KILL_QUOTES = [
     'Absolutely not.',
     'Put the phone down and drink a water.',
@@ -25,6 +39,19 @@
     'Go home. Eat a taco. Sleep.',
     'Denied. Future you says thanks.',
     'The Colosseum says no.',
+    '{contact}? From {place}? Bold. Also no.',
+    'Hand the phone to the bartender.',
+    "I've seen this movie. It ends badly.",
+    "This is {place}, not a confessional.",
+    'Nope. Order fries instead.',
+    'The group chat would never let you live this down.',
+    "You'll thank me at brunch.",
+    'Thumbs down. Both thumbs, if I could.',
+    'Delete it. Then delete the draft of the draft.',
+    '{contact} is a closed chapter. Stop re-reading it.',
+    "Is this the tequila talking? It's the tequila talking.",
+    'Sleep on it. Literally. Go to sleep.',
+    'Blocked by the council. The council is me.',
   ];
 
   const APPROVE_QUOTES = [
@@ -34,6 +61,37 @@
     "Send it. I'm getting popcorn.",
     'Surprisingly typo-free. Approved.',
     'Life is short. Godspeed.',
+    'Ugh. Fine. Go be free.',
+    "I'm approving this purely for the story tomorrow.",
+    '{contact} kind of had this coming.',
+    'Against my better judgment: yes.',
+    'The people want drama. Granted.',
+    "You're an adult. Allegedly. Approved.",
+    'Screenshot me the reply. Immediately.',
+    "Tell {contact} I said hi. Actually, don't.",
+  ];
+
+  // Judges whose relation mentions mom get their own material half the time.
+  const MOM_QUOTES = {
+    kill: [
+      "I didn't raise you to text {contact} from {place}.",
+      'Call me instead, sweetie.',
+      "Honey, no. Drink some water and text me when you're home.",
+      'Did you eat dinner? Then no.',
+      "I'm not mad. I'm disappointed. Also no.",
+    ],
+    approve: [
+      'Okay honey, but be nice.',
+      'I just want you to be happy. Also, wear a jacket.',
+      'Fine, but text me when you get home.',
+    ],
+  };
+
+  // Extra roasts when the regret meter is in the red.
+  const CATASTROPHE_QUOTES = [
+    "The regret meter says {score}%. I don't need to read the rest.",
+    '{score}% regret. Even the algorithm is begging you.',
+    'That meter is redlining. Put. It. Down.',
   ];
 
   const REGRET_TRIGGERS = [
@@ -44,8 +102,8 @@
   const SCAN_STEPS = [
     'Center your face in the oval',
     'Blink twice',
-    'Turn your head slightly left',
-    'Now try to look sober',
+    'Turn your head to the side',
+    'Hold perfectly still. Sober people can do this.',
   ];
 
   const RESULTS = {
@@ -171,6 +229,10 @@
 
   function initial(name) {
     return (name || '?').trim().charAt(0).toUpperCase() || '?';
+  }
+
+  function truncate(text, max) {
+    return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
   }
 
   function clock(date) {
@@ -429,6 +491,7 @@
       <div class="scan-wrap">
         <div class="scan-frame">
           <video autoplay playsinline muted></video>
+          <canvas class="scan-mesh"></canvas>
           <div class="scan-fallback">🥴</div>
           <div class="scan-line"></div>
         </div>
@@ -438,9 +501,12 @@
         <li><span class="bar"></span>Face</li>
         <li><span class="bar"></span>Blink</li>
         <li><span class="bar"></span>Turn</li>
-        <li><span class="bar"></span>Sober?</li>
+        <li><span class="bar"></span>Still</li>
       </ol>
-      <button class="btn btn-quiet" data-action="cancel-scan">Cancel</button>
+      <div class="stack">
+        <button id="scan-skip" class="btn btn-quiet" data-action="skip-scan" hidden>Having trouble? Skip the check</button>
+        <button class="btn btn-quiet" data-action="cancel-scan">Cancel</button>
+      </div>
     </main>`;
   }
 
@@ -474,19 +540,40 @@
     const killed = t.result === 'killed';
     const { kills, ups } = tally(t);
     const score = killed ? `${kills}–${ups}` : `${ups}–${kills}`;
-    return `<main class="screen center-screen verdict">
-      <div class="orb orb-lg ${killed ? 'orb-down' : 'orb-up'}">${thumb(killed ? 'down' : 'up', 72)}</div>
-      <span class="pill ${killed ? 'pill-armed' : 'pill-up'}">The panel has spoken · ${score}</span>
-      <h1 class="title title-xl ${killed ? 'c-down' : 'c-up'}">${killed ? 'The text dies.' : 'Sent. Godspeed.'}</h1>
-      <p class="lead muted">${killed
-        ? `${esc(t.contactName)} will never know. Your dignity survives another night.`
-        : `Your message to ${esc(t.contactName)} is on its way. The panel has been notified of your choices.`}</p>
-      <ul class="list quotes">${t.votes.filter((v) => v.quote).map((v) => `
-        <li class="card">${thumb(v.vote === 'kill' ? 'down' : 'up', 16)}<span><strong>${esc(v.name)}</strong> “${esc(v.quote)}”</span></li>`).join('')}
-      </ul>
-      <div class="stack">
-        <button class="btn btn-primary btn-lg" data-action="finish">${killed ? 'Accept my fate' : 'Back home'}</button>
-        ${killed ? '<button class="btn btn-quiet" disabled>Appeal to the Senate · coming in v2</button>' : ''}
+    const stage = killed
+      ? `<div class="verdict-stage" aria-hidden="true">
+          <div class="vs-card"><div class="bubble vs-bubble">${esc(t.text)}</div></div>
+          <div class="vs-thumb">${thumb('down', 88)}</div>
+          <div class="vs-tomb">
+            <span class="rip">R.I.P.</span>
+            <span class="epitaph">“${esc(truncate(t.text, 44))}”</span>
+            <span class="dates">Born ${esc(t.time)} · Died ${esc(clock(new Date()))}</span>
+            <span class="roses">🥀</span>
+          </div>
+        </div>`
+      : `<div class="verdict-stage" aria-hidden="true">
+          <div class="vs-thumb vs-thumb--up">${thumb('up', 64)}</div>
+          <div class="vs-card vs-card--sent">
+            <div class="bubble vs-bubble">${esc(t.text)}</div>
+            <span class="vs-stamp">Approved</span>
+          </div>
+          <span class="vs-delivered">${icon('check', 16)} Delivered to ${esc(t.contactName)}</span>
+        </div>`;
+    return `<main class="screen center-screen verdict" data-action="reveal-verdict">
+      ${stage}
+      <div class="verdict-body">
+        <span class="pill ${killed ? 'pill-armed' : 'pill-up'}">The panel has spoken · ${score}</span>
+        <h1 class="title title-xl ${killed ? 'c-down' : 'c-up'}">${killed ? 'The text dies.' : 'Sent. Godspeed.'}</h1>
+        <p class="lead muted">${killed
+          ? `${esc(t.contactName)} will never know. Your dignity survives another night.`
+          : `Your message to ${esc(t.contactName)} is on its way. The panel has been notified of your choices.`}</p>
+        <ul class="list quotes">${t.votes.filter((v) => v.quote).map((v) => `
+          <li class="card">${thumb(v.vote === 'kill' ? 'down' : 'up', 16)}<span><strong>${esc(v.name)}</strong> “${esc(v.quote)}”</span></li>`).join('')}
+        </ul>
+        <div class="stack">
+          <button class="btn btn-primary btn-lg" data-action="finish">${killed ? 'Accept my fate' : 'Back home'}</button>
+          ${killed ? '<button class="btn btn-quiet" disabled>Appeal to the Senate · coming in v2</button>' : ''}
+        </div>
       </div>
     </main>`;
   }
@@ -569,10 +656,11 @@
     home: { html: viewHome },
     location: { html: viewLocation },
     compose: { html: viewCompose },
-    intercept: { html: viewIntercept },
+    // Start downloading the face tracker while they read the warning.
+    intercept: { html: viewIntercept, mount: () => { if (navigator.mediaDevices?.getUserMedia) loadLandmarker().catch(() => {}); } },
     scan: { html: viewScan, mount: runScan },
     trial: { html: viewTrial },
-    verdict: { html: viewVerdict },
+    verdict: { html: viewVerdict, mount: playVerdict },
     nogo: { html: viewNoGo },
     panel: { html: viewPanel },
     log: { html: viewLog },
@@ -609,6 +697,206 @@
   // ---------------------------------------------------------------------------
   // Flow: send → intercept → face scan → trial → verdict
   // ---------------------------------------------------------------------------
+
+  // --- Verdict animations ----------------------------------------------------
+
+  let verdictReveal = null;
+
+  function reducedMotion() {
+    return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  }
+
+  // Screen shake + color flash + a buzz on phones that support it.
+  function impact(tone) {
+    const hard = tone === 'down';
+    $app.animate([
+      { transform: 'none' },
+      { transform: `translate(${hard ? -8 : -4}px, 3px)` },
+      { transform: `translate(${hard ? 7 : 3}px, -4px)` },
+      { transform: 'translate(-4px, 2px)' },
+      { transform: 'translate(2px, -1px)' },
+      { transform: 'none' },
+    ], { duration: hard ? 450 : 260, easing: 'ease-out' });
+    const flash = document.createElement('div');
+    flash.className = `flash flash--${tone}`;
+    $app.appendChild(flash);
+    flash.animate([{ opacity: hard ? 0.4 : 0.22 }, { opacity: 0 }], { duration: 600, easing: 'ease-out' }).onfinish = () => flash.remove();
+    try { navigator.vibrate?.(hard ? [70, 40, 140] : [25, 30, 25]); } catch { /* unsupported */ }
+  }
+
+  // Breaks the bubble into jagged, tiling shards that tumble off screen.
+  function shatter(bubble, stage) {
+    const cols = 5;
+    const rows = 3;
+    const b = bubble.getBoundingClientRect();
+    const s = stage.getBoundingClientRect();
+    const jitter = (i, n) => (i === 0 || i === n ? 0 : (Math.random() - 0.5) * 0.6 / n);
+    const pts = [];
+    for (let r = 0; r <= rows; r++) {
+      pts.push([]);
+      for (let c = 0; c <= cols; c++) pts[r].push([(c / cols + jitter(c, cols)) * 100, (r / rows + jitter(r, rows)) * 100]);
+    }
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const poly = [pts[r][c], pts[r][c + 1], pts[r + 1][c + 1], pts[r + 1][c]]
+          .map(([x, y]) => `${x.toFixed(1)}% ${y.toFixed(1)}%`).join(',');
+        const shard = bubble.cloneNode(true);
+        shard.classList.add('shard');
+        shard.style.cssText = `left:${b.left - s.left}px;top:${b.top - s.top}px;width:${b.width}px;height:${b.height}px;clip-path:polygon(${poly})`;
+        stage.appendChild(shard);
+        const dx = ((c + 0.5) / cols - 0.5) * 240 + (Math.random() - 0.5) * 80;
+        const dy = 280 + Math.random() * 220;
+        const rot = (Math.random() - 0.5) * 540;
+        shard.animate([
+          { transform: 'none', opacity: 1 },
+          { transform: `translate(${dx * 0.3}px, ${-30 - Math.random() * 40}px) rotate(${rot * 0.25}deg)`, opacity: 1, offset: 0.25 },
+          { transform: `translate(${dx}px, ${dy}px) rotate(${rot}deg)`, opacity: 0 },
+        ], { duration: 1000 + Math.random() * 500, easing: 'cubic-bezier(.3, 0, .8, .6)', fill: 'forwards' });
+      }
+    }
+    bubble.style.visibility = 'hidden';
+  }
+
+  function confetti() {
+    const canvas = document.createElement('canvas');
+    canvas.className = 'vs-confetti';
+    $app.appendChild(canvas);
+    const w = $app.clientWidth;
+    const h = $app.clientHeight;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+    const colors = ['#e8b54a', '#f5cb6b', '#3dd68c', '#ff5a5f', '#2b7bff', '#f5f2f9'];
+    const bits = Array.from({ length: 150 }, () => ({
+      x: w / 2 + (Math.random() - 0.5) * 40,
+      y: h * 0.3,
+      vx: (Math.random() - 0.5) * 16,
+      vy: -6 - Math.random() * 12,
+      size: 6 + Math.random() * 7,
+      rot: Math.random() * Math.PI * 2,
+      spin: (Math.random() - 0.5) * 0.35,
+      color: pick(colors),
+      emoji: Math.random() < 0.12,
+    }));
+    const life = 3400;
+    const start = performance.now();
+    let last = start;
+    const frame = (now) => {
+      if (!canvas.isConnected) return;
+      const k = Math.min((now - last) / 16.7, 3); // keep physics steady on 120Hz screens
+      last = now;
+      const age = now - start;
+      ctx.clearRect(0, 0, w, h);
+      ctx.globalAlpha = Math.max(0, Math.min(1, (life - age) / 600));
+      for (const bit of bits) {
+        bit.vy += 0.32 * k;
+        bit.vx *= 0.985 ** k;
+        bit.x += bit.vx * k;
+        bit.y += bit.vy * k;
+        bit.rot += bit.spin * k;
+        ctx.save();
+        ctx.translate(bit.x, bit.y);
+        ctx.rotate(bit.rot);
+        if (bit.emoji) {
+          ctx.font = `${bit.size * 2}px system-ui`;
+          ctx.fillText('👍', -bit.size, bit.size);
+        } else {
+          ctx.scale(1, Math.cos(bit.rot * 2)); // flutter
+          ctx.fillStyle = bit.color;
+          ctx.fillRect(-bit.size / 2, -bit.size / 4, bit.size, bit.size / 2);
+        }
+        ctx.restore();
+      }
+      if (age < life) requestAnimationFrame(frame);
+      else canvas.remove();
+    };
+    requestAnimationFrame(frame);
+  }
+
+  function playVerdict() {
+    const t = ui.trial;
+    const killed = t.result === 'killed';
+    const stage = $app.querySelector('.verdict-stage');
+    const body = $app.querySelector('.verdict-body');
+    const part = (sel) => stage.querySelector(sel);
+    const alive = () => ui.screen === 'verdict' && ui.trial === t && stage.isConnected;
+    const at = (ms, fn) => setTimeout(() => { if (alive()) fn(); }, ms);
+    const reveal = () => body.classList.add('is-revealed');
+    verdictReveal = reveal;
+
+    if (reducedMotion()) {
+      stage.classList.add('is-final');
+      reveal();
+      return;
+    }
+
+    const bubble = part('.vs-bubble');
+    const thumbEl = part('.vs-thumb');
+    bubble.animate([
+      { opacity: 0, transform: 'scale(.6)' },
+      { opacity: 1, transform: 'scale(1.05)', offset: 0.7 },
+      { opacity: 1, transform: 'none' },
+    ], { duration: 380, easing: 'ease-out', fill: 'both' });
+
+    if (killed) {
+      // The thumb drops, the text shatters, a tombstone rises.
+      at(550, () => thumbEl.animate([
+        { opacity: 0, transform: 'translateY(-240px) scale(2.6) rotate(-25deg)' },
+        { opacity: 1, transform: 'none' },
+      ], { duration: 320, easing: 'cubic-bezier(.55, 0, 1, .45)', fill: 'forwards' }));
+      at(870, () => {
+        shatter(bubble, stage);
+        impact('down');
+        thumbEl.animate([
+          { opacity: 1, transform: 'none' },
+          { opacity: 1, transform: 'translateY(-14px) scale(1.08)', offset: 0.3 },
+          { opacity: 0, transform: 'translateY(40px) scale(.9)' },
+        ], { duration: 700, delay: 250, easing: 'ease-in', fill: 'forwards' });
+      });
+      at(1500, () => part('.vs-tomb').animate([
+        { opacity: 0, transform: 'translateY(160px)' },
+        { opacity: 1, transform: 'translateY(-10px)', offset: 0.75 },
+        { opacity: 1, transform: 'none' },
+      ], { duration: 650, easing: 'cubic-bezier(.2, .8, .2, 1)', fill: 'forwards' }));
+      at(2300, reveal);
+      return;
+    }
+
+    // Stamped, launched, celebrated.
+    at(400, () => thumbEl.animate([
+      { opacity: 0, transform: 'scale(0) rotate(-30deg)' },
+      { opacity: 1, transform: 'scale(1.25) rotate(10deg)', offset: 0.6 },
+      { opacity: 1, transform: 'none' },
+    ], { duration: 420, easing: 'ease-out', fill: 'forwards' }));
+    at(700, () => part('.vs-stamp').animate([
+      { opacity: 0, transform: 'rotate(-12deg) scale(3)' },
+      { opacity: 1, transform: 'rotate(-12deg) scale(1)' },
+    ], { duration: 200, easing: 'cubic-bezier(.55, 0, 1, .45)', fill: 'forwards' }));
+    at(900, () => impact('up'));
+    at(1400, () => {
+      part('.vs-card').animate([
+        { transform: 'none', opacity: 1 },
+        { transform: 'translateY(14px) scale(.96)', opacity: 1, offset: 0.2 },
+        { transform: 'translate(130px, -380px) scale(.3) rotate(10deg)', opacity: 0 },
+      ], { duration: 600, easing: 'cubic-bezier(.5, 0, .9, .4)', fill: 'forwards' });
+      thumbEl.animate([
+        { opacity: 1, transform: 'none' },
+        { opacity: 1, transform: 'translateY(70px) scale(1.5) rotate(-12deg)', offset: 0.5 },
+        { opacity: 1, transform: 'translateY(70px) scale(1.5) rotate(12deg)', offset: 0.75 },
+        { opacity: 1, transform: 'translateY(70px) scale(1.5)' },
+      ], { duration: 900, delay: 300, easing: 'ease-in-out', fill: 'forwards' });
+    });
+    at(1750, () => {
+      confetti();
+      part('.vs-delivered').animate([
+        { opacity: 0, transform: 'translateY(10px)' },
+        { opacity: 1, transform: 'none' },
+      ], { duration: 400, easing: 'ease-out', fill: 'forwards' });
+    });
+    at(2200, reveal);
+  }
 
   function sendDraft() {
     const contact = contactById(ui.draft.contactId);
@@ -648,15 +936,190 @@
     return canvas.toDataURL('image/jpeg', 0.7);
   }
 
-  async function runScan() {
-    const run = ++scanRun;
-    const alive = () => run === scanRun && ui.screen === 'scan';
-    const wrap = $app.querySelector('.scan-wrap');
-    const frame = wrap.querySelector('.scan-frame');
-    const video = frame.querySelector('video');
-    const stepEl = $app.querySelector('#scan-step');
-    const steps = [...$app.querySelectorAll('.steps li')];
+  // --- Face tracking (MediaPipe Face Landmarker, entirely on-device) ---------
 
+  let landmarkerPromise = null;
+  let activeScan = null;
+
+  function loadLandmarker() {
+    if (!landmarkerPromise) {
+      landmarkerPromise = (async () => {
+        const { FaceLandmarker, FilesetResolver } = await import(`${MEDIAPIPE_URL}/vision_bundle.mjs`);
+        const fileset = await FilesetResolver.forVisionTasks(`${MEDIAPIPE_URL}/wasm`);
+        const create = (delegate) => FaceLandmarker.createFromOptions(fileset, {
+          baseOptions: { modelAssetPath: FACE_MODEL_URL, delegate },
+          runningMode: 'VIDEO',
+          numFaces: 1,
+          outputFaceBlendshapes: true,
+        });
+        try { return await create('GPU'); } catch { return await create('CPU'); }
+      })();
+      landmarkerPromise.catch(() => { landmarkerPromise = null; }); // allow a retry next scan
+    }
+    return landmarkerPromise;
+  }
+
+  // Nose tip (1) relative to the cheeks (234, 454) gives position, size and head turn.
+  function facePose(face) {
+    const nose = face[1];
+    const left = Math.min(face[234].x, face[454].x);
+    const right = Math.max(face[234].x, face[454].x);
+    const width = right - left;
+    return { x: nose.x, y: nose.y, width, turn: width ? Math.abs((nose.x - left) / width - 0.5) : 0 };
+  }
+
+  function blendshape(shapes, name) {
+    return shapes?.find((c) => c.categoryName === name)?.score ?? 0;
+  }
+
+  // Draws a sparse dot mesh over the mirrored, object-fit: cover preview.
+  function drawMesh(canvas, video, face) {
+    const ctx = canvas.getContext('2d');
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+    const dpr = window.devicePixelRatio || 1;
+    if (canvas.width !== Math.round(w * dpr)) {
+      canvas.width = Math.round(w * dpr);
+      canvas.height = Math.round(h * dpr);
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    if (!face || !video.videoWidth) return;
+    const scale = Math.max(w / video.videoWidth, h / video.videoHeight);
+    const dw = video.videoWidth * scale;
+    const dh = video.videoHeight * scale;
+    const ox = (w - dw) / 2;
+    const oy = (h - dh) / 2;
+    ctx.fillStyle = 'rgba(245, 203, 107, .85)';
+    for (let i = 0; i < face.length; i += 3) {
+      const p = face[i];
+      ctx.fillRect(w - (ox + p.x * dw) - 0.75, oy + p.y * dh - 0.75, 1.5, 1.5);
+    }
+  }
+
+  // Runs the four checks against live face data. Resolves true when they all
+  // pass (or the viewer skips), false if cancelled, null if tracking breaks.
+  function trackedChecks(landmarker, scan) {
+    const { video, canvas } = scan;
+    let step = 0;
+    let since = null;   // start of the current hold (centering / stillness)
+    let anchor = null;  // nose position the stillness check measures from
+    let swayUntil = 0;
+    let blinks = 0;
+    let eyesClosed = false;
+    let eyeBaseline = null; // this person's resting eyeBlink score, learned as we go
+    let lastTime = -1;
+
+    const advance = () => {
+      scan.done(step);
+      step += 1;
+      since = null;
+      anchor = null;
+      if (step >= SCAN_STEPS.length) return true;
+      scan.setStep(step);
+      return false;
+    };
+
+    const evaluate = (face, shapes, now) => {
+      if (!face) {
+        since = null;
+        anchor = null;
+        if (step !== 1) scan.setProgress(step, 0);
+        scan.hint('No face found. Get in the oval.');
+        return false;
+      }
+      const pose = facePose(face);
+      const centered = Math.abs(pose.x - 0.5) < 0.16 && Math.abs(pose.y - 0.5) < 0.22;
+
+      if (step === 0) {
+        if (pose.width < MIN_FACE_WIDTH || !centered) {
+          since = null;
+          scan.setProgress(0, 0);
+          scan.hint(pose.width < MIN_FACE_WIDTH ? 'Come a little closer' : SCAN_STEPS[0]);
+          return false;
+        }
+        since ??= now;
+        scan.setProgress(0, (now - since) / CENTER_HOLD_MS);
+        scan.hint('Hold it right there…');
+        return now - since >= CENTER_HOLD_MS && advance();
+      }
+
+      if (step === 1) {
+        const blink = (blendshape(shapes, 'eyeBlinkLeft') + blendshape(shapes, 'eyeBlinkRight')) / 2;
+        eyeBaseline ??= blink;
+        if (!eyesClosed && blink > Math.max(BLINK_MIN, eyeBaseline + BLINK_RISE)) eyesClosed = true;
+        else if (eyesClosed && blink < eyeBaseline + BLINK_RISE / 2) { eyesClosed = false; blinks += 1; }
+        if (!eyesClosed) eyeBaseline = eyeBaseline * 0.9 + blink * 0.1;
+        scan.setProgress(1, blinks / 2);
+        scan.hint(blinks ? 'One more blink' : SCAN_STEPS[1]);
+        return blinks >= 2 && advance();
+      }
+
+      if (step === 2) {
+        scan.setProgress(2, pose.turn / TURN_THRESHOLD);
+        scan.hint(SCAN_STEPS[2]);
+        return pose.turn >= TURN_THRESHOLD && advance();
+      }
+
+      // Step 3: face forward and hold still. Any sway restarts the clock.
+      if (pose.turn > TURN_THRESHOLD / 2 || !centered) {
+        since = null;
+        anchor = null;
+        scan.setProgress(3, 0);
+        scan.hint('Face forward, in the oval');
+        return false;
+      }
+      if (anchor && Math.hypot(pose.x - anchor.x, pose.y - anchor.y) > STILL_TOLERANCE) {
+        anchor = null;
+        swayUntil = now + 1200;
+      }
+      if (!anchor) {
+        anchor = { x: pose.x, y: pose.y };
+        since = now;
+      }
+      scan.setProgress(3, (now - since) / STILL_MS);
+      scan.hint(now < swayUntil ? 'Swaying detected. Start over.' : SCAN_STEPS[3]);
+      return now - since >= STILL_MS && advance();
+    };
+
+    scan.setStep(0);
+    return new Promise((resolve) => {
+      const tick = () => {
+        if (!scan.alive()) return resolve(false);
+        if (scan.skipped) return resolve(true);
+        if (video.readyState >= 2 && video.currentTime !== lastTime) {
+          lastTime = video.currentTime;
+          const now = performance.now();
+          let result;
+          try { result = landmarker.detectForVideo(video, now); } catch { return resolve(null); }
+          const face = result.faceLandmarks?.[0];
+          drawMesh(canvas, video, face);
+          if (evaluate(face, result.faceBlendshapes?.[0]?.categories, now)) return resolve(true);
+        }
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    });
+  }
+
+  // Timed stand-in for when there's no camera or no face tracking.
+  async function scriptedChecks(scan) {
+    for (let i = 0; i < SCAN_STEPS.length; i++) {
+      if (!scan.alive()) return false;
+      if (scan.skipped) return true;
+      scan.setStep(i);
+      const start = performance.now();
+      while (performance.now() - start < 1300) {
+        if (!scan.alive()) return false;
+        scan.setProgress(i, (performance.now() - start) / 1300);
+        await wait(50);
+      }
+      scan.done(i);
+    }
+    return true;
+  }
+
+  async function startCamera(scan) {
     try {
       if (!navigator.mediaDevices?.getUserMedia) throw new Error('Camera API unavailable');
       // Don't hang forever if the permission prompt is ignored: fall back to the
@@ -664,39 +1127,85 @@
       let timedOut = false;
       const request = navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 } }, audio: false });
       request.then((s) => { if (timedOut) s.getTracks().forEach((track) => track.stop()); }, () => {});
-      const hint = setTimeout(() => { if (alive()) stepEl.textContent = 'Allow camera access, or wait for your stunt double…'; }, 2500);
+      const hint = setTimeout(() => { if (scan.alive()) scan.hint('Allow camera access, or wait for your stunt double…'); }, 2500);
       const s = await Promise.race([
         request,
         wait(CAMERA_TIMEOUT_MS).then(() => { timedOut = true; throw new Error('Camera permission timed out'); }),
       ]).finally(() => clearTimeout(hint));
-      if (!alive()) { s.getTracks().forEach((track) => track.stop()); return; }
+      if (!scan.alive()) { s.getTracks().forEach((track) => track.stop()); return false; }
       stream = s;
-      video.srcObject = stream;
-      await video.play();
+      scan.video.srcObject = stream;
+      await scan.video.play();
+      return true;
     } catch {
-      if (!alive()) return;
-      wrap.classList.add('no-camera');
-      stepEl.textContent = 'No camera, so your stunt double will stand in.';
+      if (!scan.alive()) return false;
+      scan.wrap.classList.add('no-camera');
+      scan.hint('No camera, so your stunt double will stand in.');
       await wait(1400);
+      return false;
     }
+  }
 
-    for (let i = 0; i < SCAN_STEPS.length; i++) {
-      if (!alive()) return stopCamera();
-      steps[i].classList.add('is-active');
-      stepEl.textContent = SCAN_STEPS[i];
-      await wait(1300);
-      steps[i].classList.replace('is-active', 'is-done');
+  async function runScan() {
+    const run = ++scanRun;
+    const wrap = $app.querySelector('.scan-wrap');
+    const stepEl = $app.querySelector('#scan-step');
+    const skipBtn = $app.querySelector('#scan-skip');
+    const stepEls = [...$app.querySelectorAll('.steps li')];
+    const clamp = (p) => Math.max(0, Math.min(1, p));
+    const scan = {
+      wrap,
+      video: wrap.querySelector('video'),
+      canvas: wrap.querySelector('.scan-mesh'),
+      skipped: false,
+      onSkip: null,
+      alive: () => run === scanRun && ui.screen === 'scan',
+      hint: (text) => { if (stepEl.textContent !== text) stepEl.textContent = text; },
+      setStep: (i) => { stepEls[i].classList.add('is-active'); scan.hint(SCAN_STEPS[i]); },
+      setProgress: (i, p) => stepEls[i].style.setProperty('--p', clamp(p).toFixed(3)),
+      done: (i) => stepEls[i].classList.replace('is-active', 'is-done'),
+    };
+    const skipped = new Promise((resolve) => { scan.onSkip = resolve; });
+    activeScan = scan;
+    const skipTimer = setTimeout(() => { if (scan.alive()) skipBtn.hidden = false; }, SKIP_AFTER_MS);
+
+    const tracker = navigator.mediaDevices?.getUserMedia ? loadLandmarker().catch(() => null) : null;
+    const hasCamera = await startCamera(scan);
+
+    let passed = null;
+    if (hasCamera && tracker && scan.alive()) {
+      scan.hint('Loading face tracking…');
+      const landmarker = await Promise.race([tracker, wait(TRACKER_TIMEOUT_MS).then(() => null), skipped.then(() => null)]);
+      if (landmarker && scan.alive() && !scan.skipped) {
+        wrap.classList.add('tracking');
+        passed = await trackedChecks(landmarker, scan);
+        wrap.classList.remove('tracking');
+      }
+      if (passed === null && scan.alive() && !scan.skipped) {
+        scan.hint('Face tracking unavailable. Running the demo check.');
+        await wait(1200);
+      }
     }
-    if (!alive()) return stopCamera();
+    if (scan.skipped) passed = true;
+    if (passed === null) passed = await scriptedChecks(scan);
 
-    const selfie = captureFrame(video);
+    clearTimeout(skipTimer);
+    if (activeScan === scan) activeScan = null;
+    if (!passed || !scan.alive()) return stopCamera();
+
+    skipBtn.hidden = true;
+    drawMesh(scan.canvas, scan.video, null);
+    const selfie = captureFrame(scan.video);
     stopCamera();
-    if (selfie) frame.insertAdjacentHTML('beforeend', `<img class="scan-still" src="${selfie}" alt="">`);
+    if (selfie) wrap.querySelector('.scan-frame').insertAdjacentHTML('beforeend', `<img class="scan-still" src="${selfie}" alt="">`);
+    stepEls.forEach((li) => { li.classList.remove('is-active'); li.classList.add('is-done'); });
     wrap.classList.add('verified');
-    stepEl.textContent = 'Identity verified. Unfortunately, it is you.';
+    scan.hint(scan.skipped
+      ? 'Check skipped. The panel will judge you anyway.'
+      : 'Identity verified. Unfortunately, it is you.');
 
     await wait(1100);
-    if (alive()) startTrial(selfie);
+    if (scan.alive()) startTrial(selfie);
   }
 
   function startTrial(selfie) {
@@ -708,6 +1217,8 @@
       time: clock(new Date()),
       votes: data.panel.map((j, i) => ({ name: j.name || `Judge ${i + 1}`, relation: j.relation, vote: null, quote: null })),
       timers: [],
+      usedQuotes: [],
+      score: regretScore(ui.draft.text),
       lastVoted: null,
       decided: false,
       result: null,
@@ -721,6 +1232,20 @@
     });
   }
 
+  // Picks a reply no other judge has used this trial, tailored to who's voting.
+  function panelQuote(vote, judge, trial) {
+    let pool = vote === 'kill' ? KILL_QUOTES : APPROVE_QUOTES;
+    if (/\b(mom|mother|mum|mama)\b/i.test(judge.relation || '') && Math.random() < 0.5) pool = MOM_QUOTES[vote];
+    else if (vote === 'kill' && trial.score >= 75 && Math.random() < 0.4) pool = CATASTROPHE_QUOTES;
+    const unused = pool.filter((q) => !trial.usedQuotes.includes(q));
+    const quote = pick(unused.length ? unused : pool);
+    trial.usedQuotes.push(quote);
+    return quote
+      .replace(/\{contact\}/g, trial.contactName)
+      .replace(/\{place\}/g, trial.locationName)
+      .replace(/\{score\}/g, trial.score);
+  }
+
   function castVote(index, vote) {
     const trial = ui.trial;
     if (!trial || trial.decided) return;
@@ -729,7 +1254,7 @@
 
     judge.vote = vote;
     trial.lastVoted = index;
-    judge.quote = pick(vote === 'kill' ? KILL_QUOTES : APPROVE_QUOTES);
+    judge.quote = panelQuote(vote, judge, trial);
 
     const { kills, ups } = tally(trial);
     if (kills >= 2 || ups >= 2) {
@@ -758,6 +1283,11 @@
     'pick-contact': (d) => { ui.draft.contactId = d.id; render(); },
     send: sendDraft,
     'cancel-scan': () => { scanRun++; stopCamera(); show('intercept'); },
+    'skip-scan': () => {
+      if (!activeScan) return;
+      activeScan.skipped = true;
+      activeScan.onSkip();
+    },
     restraint: () => {
       logEntry({ result: 'restraint', ...draftSummary() });
       clearDraft();
@@ -775,6 +1305,7 @@
       toast('Text withdrawn. Wise.');
       show('home');
     },
+    'reveal-verdict': () => verdictReveal?.(),
     finish: () => { ui.trial = null; clearDraft(); show('home'); },
     'set-location': (d) => {
       data.locationId = d.id;

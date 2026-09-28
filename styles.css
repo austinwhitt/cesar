@@ -38,6 +38,7 @@ body {
 button, input, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; background: none; border: 0; padding: 0; }
 h1, h2, p { margin: 0; }
+[hidden] { display: none !important; }
 .icon, .thumb { flex-shrink: 0; display: block; }
 
 /* ---------- Stage & phone frame ---------- */
@@ -490,7 +491,9 @@ button.card:active { transform: scale(.985); }
 .scan-fallback { position: absolute; inset: 0; display: none; place-items: center; font-size: 96px; }
 .no-camera video { display: none; }
 .no-camera .scan-fallback { display: grid; }
-.scan-still { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.scan-mesh { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; pointer-events: none; }
+.tracking .scan-line { display: none; }
+.scan-still { position: absolute; z-index: 2; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .scan-line {
   position: absolute;
   left: 0;
@@ -509,9 +512,16 @@ button.card:active { transform: scale(.985); }
 .steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
 .steps li { display: flex; flex-direction: column; gap: 8px; font-size: 12px; font-weight: 500; color: var(--muted); transition: color .3s; }
 .steps .bar { position: relative; height: 4px; background: rgba(255, 255, 255, .08); border-radius: 99px; overflow: hidden; }
-.steps .bar::after { content: ''; position: absolute; inset: 0; width: 0; background: var(--gold); border-radius: inherit; }
+.steps .bar::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  width: calc(var(--p, 0) * 100%); /* driven live by the face checks */
+  background: var(--gold);
+  border-radius: inherit;
+  transition: width .12s linear;
+}
 .steps li.is-active { color: var(--text); }
-.steps li.is-active .bar::after { width: 100%; transition: width 1.3s linear; }
 .steps li.is-done { color: var(--up); }
 .steps li.is-done .bar::after { width: 100%; background: var(--up); }
 
@@ -602,6 +612,93 @@ button.card:active { transform: scale(.985); }
 .deciding { text-align: center; font-weight: 600; color: var(--gold); }
 
 /* ---------- Verdict ---------- */
+
+.verdict.is-entering > * { animation: none; } /* the verdict runs its own show */
+
+.verdict-stage {
+  position: relative;
+  height: 250px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.vs-card { position: relative; max-width: 82%; }
+.vs-bubble { max-width: 100%; font-size: 17px; opacity: 0; }
+.shard { position: absolute; margin: 0; max-width: none; opacity: 1; pointer-events: none; will-change: transform, opacity; }
+
+/* Centered absolute pieces keep `transform` free for the animations. */
+.vs-thumb, .vs-stamp, .vs-delivered, .vs-tomb {
+  position: absolute;
+  left: 0;
+  right: 0;
+  margin-inline: auto;
+  width: max-content;
+  opacity: 0;
+}
+.vs-thumb { top: 6px; z-index: 2; filter: drop-shadow(0 10px 24px rgba(255, 90, 95, .5)); }
+.vs-thumb--up { filter: drop-shadow(0 10px 24px rgba(61, 214, 140, .5)); }
+
+.vs-stamp {
+  top: 50%;
+  margin-top: -24px;
+  padding: 4px 14px;
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--up);
+  background: rgba(13, 11, 18, .35);
+  border: 3px solid var(--up);
+  border-radius: 10px;
+  box-shadow: 0 0 24px rgba(61, 214, 140, .35);
+}
+.vs-delivered {
+  bottom: 18px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--up);
+}
+
+.vs-tomb {
+  bottom: 0;
+  width: 196px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 30px 18px 20px;
+  text-align: center;
+  background: linear-gradient(180deg, #3b3647, #24202d);
+  border: 1px solid rgba(255, 255, 255, .12);
+  border-radius: 98px 98px 14px 14px;
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, .08), 0 24px 40px -12px rgba(0, 0, 0, .7);
+}
+.vs-tomb .rip { font-size: 30px; font-weight: 800; letter-spacing: .1em; color: #d6cfe2; }
+.vs-tomb .epitaph { font-size: 13px; font-style: italic; line-height: 1.35; overflow-wrap: anywhere; }
+.vs-tomb .dates { font-size: 10px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.vs-tomb .roses { position: absolute; bottom: -6px; left: -14px; font-size: 26px; transform: rotate(-18deg); }
+
+/* End state for reduced motion */
+.is-final .vs-card { visibility: hidden; }
+.is-final .vs-tomb, .is-final .vs-delivered, .is-final .vs-thumb--up { opacity: 1; }
+.is-final .vs-thumb--up { transform: translateY(70px) scale(1.5); }
+
+.verdict-body { display: flex; flex-direction: column; gap: 16px; opacity: 0; pointer-events: none; }
+.verdict-body.is-revealed { opacity: 1; pointer-events: auto; }
+.verdict-body.is-revealed > * { animation: rise .5s var(--ease) both; }
+.verdict-body.is-revealed > :nth-child(2) { animation-delay: .05s; }
+.verdict-body.is-revealed > :nth-child(3) { animation-delay: .1s; }
+.verdict-body.is-revealed > :nth-child(4) { animation-delay: .15s; }
+.verdict-body.is-revealed > :nth-child(5) { animation-delay: .2s; }
+
+.flash { position: absolute; inset: 0; z-index: 14; pointer-events: none; }
+.flash--down { background: var(--down); }
+.flash--up { background: var(--up); }
+.vs-confetti { position: absolute; inset: 0; z-index: 15; width: 100%; height: 100%; pointer-events: none; }
 
 .quotes { text-align: left; }
 .quotes li { display: flex; align-items: flex-start; gap: 12px; padding: 12px 14px; font-size: 14px; }
