@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Cesar</title>
+  <meta name="description" content="Should you text them? Let the panel decide.">
+  <meta name="theme-color" content="#0d0b12">
+  <link rel="icon" href="assets/logo.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="assets/logo.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="stage">
+    <aside class="blurb">
+      <img src="assets/logo.svg" width="72" height="72" alt="">
+      <h1>Cesar</h1>
+      <p class="sub">Should I text this person while intoxicated? Let the panel decide.</p>
+      <ol>
+        <li>You start out <strong>at a bar</strong> (simulated GPS). Tap the location card to change it.</li>
+        <li>Tap <strong>Text someone</strong> and pick someone on your No-Go list.</li>
+        <li>Pass the face scan. Your selfie and text go to your three-judge panel.</li>
+        <li>Thumbs up, it sends. Thumbs down, it dies.</li>
+      </ol>
+      <p class="fine">Interactive prototype. No texts are sent, and your camera image never leaves this device.</p>
+    </aside>
+
+    <div class="phone">
+      <div id="app" class="app"></div>
+      <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    </div>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
