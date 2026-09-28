@@ -394,12 +394,12 @@
       : '';
     return `<main class="screen with-tabs">
       <header class="appbar">
-        <div class="brand">${logo(24)}<span class="wordmark">Cesar</span></div>
+        <div class="brand">${logo(24)}<span class="wordmark">Caesar</span></div>
         <span class="pill ${loc.risky ? 'pill-armed' : ''}"><span class="dot"></span>${loc.risky ? 'Armed' : 'Standby'}</span>
       </header>
 
       <section class="hero">
-        <h1 class="title title-xl">${loc.risky ? "You're out.<br>Cesar's watching." : "All quiet.<br>Cesar's resting."}</h1>
+        <h1 class="title title-xl">${loc.risky ? "You're out.<br>Caesar's watching." : "All quiet.<br>Caesar's resting."}</h1>
         <p class="muted">${loc.risky
           ? 'Texts to your No-Go list go to your panel first.'
           : 'No drinking spot detected. Text freely.'}</p>
@@ -908,7 +908,7 @@
 
     logEntry({ result: 'free', ...draftSummary() });
     toast(contact.noGo
-      ? "Sent. You're not out drinking, so Cesar let it slide."
+      ? "Sent. You're not out drinking, so Caesar let it slide."
       : `Sent to ${contact.name} ✓`);
     clearDraft();
     show('home');
@@ -1311,7 +1311,7 @@
       data.locationId = d.id;
       save();
       const loc = currentLocation();
-      toast(loc.risky ? `${loc.name}. Cesar is armed.` : `${loc.name}. Cesar is on standby.`);
+      toast(loc.risky ? `${loc.name}. Caesar is armed.` : `${loc.name}. Caesar is on standby.`);
       show('home');
     },
     'remove-nogo': (d) => {

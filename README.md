@@ -1,13 +1,13 @@
 <p align="center">
-  <img src="assets/logo.svg" width="120" alt="Cesar logo: a thumbs up and a thumbs down">
+  <img src="assets/logo.svg" width="120" alt="Caesar logo: a thumbs up and a thumbs down">
 </p>
 
-<h1 align="center">Cesar</h1>
+<h1 align="center">Caesar</h1>
 <p align="center"><em>Should I text this person while intoxicated? Let the panel decide.</em></p>
 
 ---
 
-Cesar is your wingman for bad decisions. Put the people you shouldn't text after a few drinks on your **No-Go list**. When you're out at a bar or restaurant and try to text one of them, Cesar makes you **verify your face**. Then it sends your selfie and the text to your **panel**: three friends you picked ahead of time. Two thumbs up and it sends. Two thumbs down and it dies.
+Caesar is your wingman for bad decisions. Put the people you shouldn't text after a few drinks on your **No-Go list**. When you're out at a bar or restaurant and try to text one of them, Caesar makes you **verify your face**. Then it sends your selfie and the text to your **panel**: three friends you picked ahead of time. Two thumbs up and it sends. Two thumbs down and it dies.
 
 Like Caesar at the Colosseum. Thumbs up or thumbs down.
 
@@ -47,7 +47,7 @@ The camera needs `localhost` or HTTPS, so serve it rather than double-clicking `
 | --- | --- | --- |
 | Location | You pick from a list | GPS + venue lookup (e.g. Google Places) to spot bars and restaurants |
 | Face scan | Real on-device face tracking (MediaPipe): face in the oval, two real blinks, head turn, hold still. Proves a live face, not *whose* face | Identity check against the account owner's face |
-| Blocking the text | Texts are written inside Cesar | Cesar is the messaging app for No-Go contacts (iOS won't let apps intercept iMessage) |
+| Blocking the text | Texts are written inside Caesar | Caesar is the messaging app for No-Go contacts (iOS won't let apps intercept iMessage) |
 | Panel | Simulated judges with ~45 context-aware replies (Mom has her own lines) | Judges get an SMS link and vote in the browser, no install needed |
 | Timeout | — | No verdict in 15 minutes = the text dies |
 
